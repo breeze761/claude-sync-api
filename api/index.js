@@ -30,8 +30,9 @@ const API_KEY = process.env.CLAUDE_SYNC_KEY;
 
 function authenticate(req) {
   const authHeader = req.headers.authorization;
+  // Try multiple ways to get the key (Vercel passes query params differently)
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const queryKey = url.searchParams.get('key');
+  const queryKey = url.searchParams.get('key') || (req.query && req.query.key);
   const token = authHeader?.replace('Bearer ', '') || queryKey;
   if (!API_KEY) return { error: 'API key not configured', status: 500 };
   if (token !== API_KEY) return { error: 'Unauthorized', status: 401 };
