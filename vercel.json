@@ -1,8 +1,17 @@
 {
   "version": 2,
+  "public": true,
   "rewrites": [
     { "source": "/health", "destination": "/api" },
     { "source": "/sync", "destination": "/api" },
     { "source": "/sync/:path*", "destination": "/api" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "all" }
+      ]
+    }
   ]
 }
