@@ -45,7 +45,16 @@ function authenticate(req) {
   });
 
   if (!API_KEY) return { error: 'API key not configured', status: 500, debug: { url: req.url, hasQuery: !!req.query } };
-  if (token !== API_KEY) return { error: 'Unauthorized', status: 401, debug: { url: req.url, queryKey: queryKey?.substring(0, 8) + '...', apiKeyStart: API_KEY?.substring(0, 8) + '...' } };
+  if (token !== API_KEY) return {
+    error: 'Unauthorized',
+    status: 401,
+    debug: {
+      tokenLen: token?.length,
+      apiKeyLen: API_KEY?.length,
+      match: token === API_KEY,
+      tokenTrimmed: token?.trim() === API_KEY?.trim()
+    }
+  };
   return null;
 }
 
