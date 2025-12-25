@@ -1,17 +1,8 @@
-const express = require('express');
 const path = require('path');
 const fs = require('fs');
 
-const app = express();
-app.use(express.json({ limit: '10mb' }));
-
 // Use /tmp for Vercel serverless (writable directory)
-const dataDir = process.env.VERCEL ? '/tmp' : (process.env.DATA_PATH || path.join(__dirname, '..', 'data'));
-
-// For Vercel, we'll use in-memory storage with JSON files as backup
-let projectsCache = {};
-let historyCache = {};
-
+const dataDir = '/tmp';
 const projectsFile = path.join(dataDir, 'projects.json');
 const historyFile = path.join(dataDir, 'history.json');
 
@@ -35,157 +26,144 @@ function saveJSON(file, data) {
   }
 }
 
-// Initialize caches
-function initCaches() {
-  if (Object.keys(projectsCache).length === 0) {
-    projectsCache = loadJSON(projectsFile);
-  }
-  if (Object.keys(historyCache).length === 0) {
-    historyCache = loadJSON(historyFile);
-  }
-}
-
-function getProjects() {
-  initCaches();
-  return projectsCache;
-}
-
-function saveProjects(data) {
-  projectsCache = data;
-  saveJSON(projectsFile, data);
-}
-
-function getHistory() {
-  initCaches();
-  return historyCache;
-}
-
-function saveHistory(data) {
-  historyCache = data;
-  saveJSON(historyFile, data);
-}
-
 const API_KEY = process.env.CLAUDE_SYNC_KEY;
-function authenticate(req, res, next) {
+
+function authenticate(req) {
   const authHeader = req.headers.authorization;
-  const queryKey = req.query.key;
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const queryKey = url.searchParams.get('key');
   const token = authHeader?.replace('Bearer ', '') || queryKey;
-  if (!API_KEY) return res.status(500).json({ error: 'API key not configured' });
-  if (token !== API_KEY) return res.status(401).json({ error: 'Unauthorized' });
-  next();
+  if (!API_KEY) return { error: 'API key not configured', status: 500 };
+  if (token !== API_KEY) return { error: 'Unauthorized', status: 401 };
+  return null;
 }
 
-// CORS for web access
-app.use((req, res, next) => {
+function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+module.exports = async (req, res) => {
+  setCors(res);
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-  next();
-});
 
-app.get('/api', (req, res) => res.json({ status: 'ok', message: 'Claude Sync API' }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = url.pathname;
 
-app.get('/api/sync', authenticate, (req, res) => {
-  const projects = getProjects();
-  const list = Object.entries(projects).map(([name, data]) => ({
-    project: name,
-    summary: data.summary,
-    updated_at: data.updated_at
-  })).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
-  res.json({ projects: list });
-});
-
-app.get('/api/sync/:project', authenticate, (req, res) => {
-  const { project } = req.params;
-  const includeFiles = req.query.include_files === 'true';
-  const includeHistory = parseInt(req.query.include_history) || 0;
-
-  const projects = getProjects();
-  const data = projects[project];
-  if (!data) return res.status(404).json({ error: 'Project not found' });
-
-  const response = {
-    project,
-    summary: data.summary,
-    claude_md: data.claude_md,
-    updated_at: data.updated_at,
-    metadata: data.metadata
-  };
-
-  if (includeFiles && data.files) response.files = data.files;
-
-  if (includeHistory > 0) {
-    const history = getHistory();
-    const projectHistory = (history[project] || [])
-      .sort((a, b) => new Date(b.synced_at) - new Date(a.synced_at))
-      .slice(0, includeHistory);
-    response.history = projectHistory;
+  // Health check - no auth required
+  if (pathname === '/api' || pathname === '/api/health' || pathname === '/health') {
+    return res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   }
 
-  res.json(response);
-});
+  // All other routes require auth
+  const authError = authenticate(req);
+  if (authError) {
+    return res.status(authError.status).json({ error: authError.error });
+  }
 
-app.post('/api/sync/:project', authenticate, (req, res) => {
-  const { project } = req.params;
-  const { claude_md, summary, files, metadata } = req.body;
-  const now = new Date().toISOString();
+  const projects = loadJSON(projectsFile);
+  const history = loadJSON(historyFile);
 
-  const projects = getProjects();
-  const existing = projects[project] || {};
+  // GET /api/sync - list all projects
+  if ((pathname === '/api/sync' || pathname === '/sync') && req.method === 'GET') {
+    const list = Object.entries(projects).map(([name, data]) => ({
+      project: name,
+      summary: data.summary,
+      updated_at: data.updated_at
+    })).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    return res.status(200).json({ projects: list });
+  }
 
-  projects[project] = {
-    claude_md: claude_md || existing.claude_md,
-    summary: summary || existing.summary,
-    files: files || existing.files,
-    metadata: metadata || existing.metadata,
-    updated_at: now
-  };
-  saveProjects(projects);
+  // Match /api/sync/:project or /sync/:project
+  const syncMatch = pathname.match(/^\/(?:api\/)?sync\/([^\/]+)(?:\/history)?$/);
+  if (syncMatch) {
+    const project = decodeURIComponent(syncMatch[1]);
+    const isHistory = pathname.endsWith('/history');
 
-  if (summary) {
-    const history = getHistory();
-    if (!history[project]) history[project] = [];
-    history[project].push({
-      summary,
-      claude_md,
-      files,
-      metadata,
-      synced_at: now
-    });
-    if (history[project].length > 50) {
-      history[project] = history[project].slice(-50);
+    // GET /api/sync/:project/history
+    if (isHistory && req.method === 'GET') {
+      const limit = Math.min(parseInt(url.searchParams.get('limit')) || 20, 100);
+      const projectHistory = (history[project] || [])
+        .sort((a, b) => new Date(b.synced_at) - new Date(a.synced_at))
+        .slice(0, limit);
+      return res.status(200).json({ project, history: projectHistory });
     }
-    saveHistory(history);
+
+    // GET /api/sync/:project
+    if (req.method === 'GET') {
+      const data = projects[project];
+      if (!data) return res.status(404).json({ error: 'Project not found' });
+
+      const includeFiles = url.searchParams.get('include_files') === 'true';
+      const includeHistory = parseInt(url.searchParams.get('include_history')) || 0;
+
+      const response = {
+        project,
+        summary: data.summary,
+        claude_md: data.claude_md,
+        updated_at: data.updated_at,
+        metadata: data.metadata
+      };
+
+      if (includeFiles && data.files) response.files = data.files;
+
+      if (includeHistory > 0) {
+        const projectHistory = (history[project] || [])
+          .sort((a, b) => new Date(b.synced_at) - new Date(a.synced_at))
+          .slice(0, includeHistory);
+        response.history = projectHistory;
+      }
+
+      return res.status(200).json(response);
+    }
+
+    // POST /api/sync/:project
+    if (req.method === 'POST') {
+      const body = req.body || {};
+      const { claude_md, summary, files, metadata } = body;
+      const now = new Date().toISOString();
+
+      const existing = projects[project] || {};
+      projects[project] = {
+        claude_md: claude_md || existing.claude_md,
+        summary: summary || existing.summary,
+        files: files || existing.files,
+        metadata: metadata || existing.metadata,
+        updated_at: now
+      };
+      saveJSON(projectsFile, projects);
+
+      if (summary) {
+        if (!history[project]) history[project] = [];
+        history[project].push({
+          summary,
+          claude_md,
+          files,
+          metadata,
+          synced_at: now
+        });
+        if (history[project].length > 50) {
+          history[project] = history[project].slice(-50);
+        }
+        saveJSON(historyFile, history);
+      }
+
+      return res.status(200).json({ success: true, project, updated_at: now });
+    }
+
+    // DELETE /api/sync/:project
+    if (req.method === 'DELETE') {
+      delete projects[project];
+      saveJSON(projectsFile, projects);
+      delete history[project];
+      saveJSON(historyFile, history);
+      return res.status(200).json({ success: true, deleted: project });
+    }
   }
 
-  res.json({ success: true, project, updated_at: now });
-});
-
-app.get('/api/sync/:project/history', authenticate, (req, res) => {
-  const { project } = req.params;
-  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  const history = getHistory();
-  const projectHistory = (history[project] || [])
-    .sort((a, b) => new Date(b.synced_at) - new Date(a.synced_at))
-    .slice(0, limit);
-  res.json({ project, history: projectHistory });
-});
-
-app.delete('/api/sync/:project', authenticate, (req, res) => {
-  const { project } = req.params;
-  const projects = getProjects();
-  delete projects[project];
-  saveProjects(projects);
-
-  const history = getHistory();
-  delete history[project];
-  saveHistory(history);
-
-  res.json({ success: true, deleted: project });
-});
-
-module.exports = app;
+  return res.status(404).json({ error: 'Not found' });
+};

@@ -3,6 +3,6 @@
   "rewrites": [
     { "source": "/health", "destination": "/api" },
     { "source": "/sync", "destination": "/api" },
-    { "source": "/sync/(.*)", "destination": "/api" }
+    { "source": "/sync/:path*", "destination": "/api" }
   ]
 }
