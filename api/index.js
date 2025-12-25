@@ -30,31 +30,11 @@ const API_KEY = process.env.CLAUDE_SYNC_KEY?.trim();
 
 function authenticate(req) {
   const authHeader = req.headers.authorization;
-  // Try multiple ways to get the key (Vercel passes query params differently)
   const url = new URL(req.url, `http://${req.headers.host}`);
   const queryKey = url.searchParams.get('key') || (req.query && req.query.key);
   const token = authHeader?.replace('Bearer ', '') || queryKey;
-
-  // Debug: log what we're seeing
-  console.log('Auth debug:', {
-    url: req.url,
-    queryKey,
-    hasApiKey: !!API_KEY,
-    apiKeyLength: API_KEY?.length,
-    tokenLength: token?.length
-  });
-
-  if (!API_KEY) return { error: 'API key not configured', status: 500, debug: { url: req.url, hasQuery: !!req.query } };
-  if (token !== API_KEY) return {
-    error: 'Unauthorized',
-    status: 401,
-    debug: {
-      tokenLen: token?.length,
-      apiKeyLen: API_KEY?.length,
-      match: token === API_KEY,
-      tokenTrimmed: token?.trim() === API_KEY?.trim()
-    }
-  };
+  if (!API_KEY) return { error: 'API key not configured', status: 500 };
+  if (token !== API_KEY) return { error: 'Unauthorized', status: 401 };
   return null;
 }
 
@@ -82,7 +62,7 @@ module.exports = async (req, res) => {
   // All other routes require auth
   const authError = authenticate(req);
   if (authError) {
-    return res.status(authError.status).json({ error: authError.error, debug: authError.debug });
+    return res.status(authError.status).json({ error: authError.error });
   }
 
   const projects = loadJSON(projectsFile);
