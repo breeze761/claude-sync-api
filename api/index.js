@@ -44,8 +44,8 @@ function authenticate(req) {
     tokenLength: token?.length
   });
 
-  if (!API_KEY) return { error: 'API key not configured', status: 500 };
-  if (token !== API_KEY) return { error: 'Unauthorized', status: 401 };
+  if (!API_KEY) return { error: 'API key not configured', status: 500, debug: { url: req.url, hasQuery: !!req.query } };
+  if (token !== API_KEY) return { error: 'Unauthorized', status: 401, debug: { url: req.url, queryKey: queryKey?.substring(0, 8) + '...', apiKeyStart: API_KEY?.substring(0, 8) + '...' } };
   return null;
 }
 
@@ -73,7 +73,7 @@ module.exports = async (req, res) => {
   // All other routes require auth
   const authError = authenticate(req);
   if (authError) {
-    return res.status(authError.status).json({ error: authError.error });
+    return res.status(authError.status).json({ error: authError.error, debug: authError.debug });
   }
 
   const projects = loadJSON(projectsFile);
