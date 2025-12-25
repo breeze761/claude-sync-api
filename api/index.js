@@ -34,6 +34,16 @@ function authenticate(req) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const queryKey = url.searchParams.get('key') || (req.query && req.query.key);
   const token = authHeader?.replace('Bearer ', '') || queryKey;
+
+  // Debug: log what we're seeing
+  console.log('Auth debug:', {
+    url: req.url,
+    queryKey,
+    hasApiKey: !!API_KEY,
+    apiKeyLength: API_KEY?.length,
+    tokenLength: token?.length
+  });
+
   if (!API_KEY) return { error: 'API key not configured', status: 500 };
   if (token !== API_KEY) return { error: 'Unauthorized', status: 401 };
   return null;
