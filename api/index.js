@@ -26,7 +26,7 @@ function saveJSON(file, data) {
   }
 }
 
-const API_KEY = process.env.CLAUDE_SYNC_KEY;
+const API_KEY = process.env.CLAUDE_SYNC_KEY?.trim();
 
 function authenticate(req) {
   const authHeader = req.headers.authorization;
